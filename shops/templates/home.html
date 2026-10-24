@@ -1,0 +1,66 @@
+ <!DOCTYPE html>
+ {% load static %}
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mboa237 API - Backend</title>
+<script src="{% static 'js/tailwind.js' %}"></script>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Outfit',sans-serif}
+  .glass{backdrop-filter:blur(16px);background:rgba(255,255,255,0.8)}
+</style>
+</head>
+<body class="bg-[#f8fafc] text-slate-800 min-h-screen flex flex-col">
+
+<header class="h-[64px] sticky top-0 z-50 glass border-b flex items-center justify-between px-6">
+  <div class="flex items-center gap-2 font-extrabold text-xl">
+    <span class="w-8 h-8 rounded-lg bg-gradient-to-br from-green-600 via-yellow-400 to-red-500 flex items-center justify-center text-white">M</span>
+    Mboa237
+  </div>
+  <a href="https://mboa237.vercel.app" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition">Visit Store →</a>
+</header>
+
+<main class="flex-1 flex items-center justify-center p-6">
+  <div class="max-w-3xl w-full">
+    <div class="bg-white rounded-[24px] shadow-[0_20px_60px_-20px_rgba(0,0,0,0.15)] border p-8 md:p-12 text-center relative overflow-hidden">
+      <!-- bg blobs -->
+      <div class="absolute -top-10 -left-10 w-40 h-40 bg-blue-100 rounded-full blur-3xl opacity-60"></div>
+      <div class="absolute -bottom-10 -right-10 w-40 h-40 bg-green-100 rounded-full blur-3xl opacity-60"></div>
+      
+      <div class="relative">
+        <div class="inline-flex items-center gap-2 bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold mb-4">
+          <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> API LIVE - v1.0
+        </div>
+        <h1 class="text-4xl md:text-5xl font-extrabold tracking-tight mb-4">Welcome to <span class="text-green-600">Mboa237</span> API</h1>
+        <p class="text-slate-500 text-lg max-w-xl mx-auto">This is the private backend powering the Mboa237 marketplace. All shops, products and NotchPay payments run through here.</p>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-8 text-left">
+          <div class="bg-slate-50 rounded-xl p-4 border">
+            <div class="text-xs font-bold text-slate-400">BASE URL</div>
+            <div class="font-mono text-sm mt-1">/api/</div>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-4 border">
+            <div class="text-xs font-bold text-slate-400">STATUS</div>
+            <div class="font-semibold text-sm mt-1 text-green-600">● Operational</div>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-4 border">
+            <div class="text-xs font-bold text-slate-400">DOCS</div>
+            <div class="font-mono text-sm mt-1">/api/docs/</div>
+          </div>
+        </div>
+
+        <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+          <a href="https://mboa237.vercel.app" class="bg-slate-900 text-white px-6 py-3 rounded-full font-semibold">Go to Public Marketplace</a>
+          <a href="/admin/" class="bg-white border px-6 py-3 rounded-full font-semibold">Admin Login</a>
+        </div>
+        <p class="text-xs text-slate-400 mt-6">If you are not part of Mboa237 Association, please use the public web.</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="text-center text-xs text-slate-400 p-6">© 2026 Mboa237 • Made in Cameroon • Douala</footer>
+</body>
+</html>
