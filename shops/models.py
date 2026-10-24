@@ -113,7 +113,7 @@ class Shop(models.Model):
         help_text="True si la boutique a bénéficié du trial 30 jours",
     )
     is_test_mode = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Si activé, les paiements utiliseront NotchPay en mode test (100 XAF)",
     )
 
