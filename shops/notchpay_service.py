@@ -36,7 +36,6 @@ def _get_client() -> "NotchPay":
         client.set_grant_key(settings.NOTCHPAY_GRANT_KEY)
     return client
 
-
 def initialize_payment(
     *,
     amount: int,
@@ -47,10 +46,6 @@ def initialize_payment(
     callback_url: str,
     metadata: dict | None = None,
 ) -> dict:
-    """
-    Crée un paiement NotchPay et retourne le dict complet :
-    { authorization_url, reference, transaction_id, raw }
-    """
     if amount < 100:
         raise NotchPayError("Le montant minimum NotchPay est de 100 XAF.")
 
@@ -65,58 +60,71 @@ def initialize_payment(
                     "email": customer_email or "client@mboa237.com",
                     "name": customer_name or "Client Mboa237",
                 },
-                "reference": reference,
+                "reference": reference,      # our SUB-xxx
+                "trxref": reference,          # ← send BOTH to maximize compatibility
                 "callback": callback_url,
                 "description": description,
-                "metadata": metadata or {},
+                "metadata": {
+                    **(metadata or {}),
+                    "internal_reference": reference,  # ← recovery key
+                },
             }
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("NotchPay init failed for %s", reference)
         raise NotchPayError(f"Échec de l'initialisation du paiement : {exc}") from exc
 
+    # 🔑 THE FIX — grab NotchPay's own reference NOW
+    notchpay_ref = (
+        getattr(payment, "reference", None)
+        or getattr(payment, "trxref", None)
+        or getattr(getattr(payment, "transaction", None), "reference", None)
+        or getattr(getattr(payment, "transaction", None), "id", None)
+    )
+
     return {
         "authorization_url": payment.authorization_url,
-        "reference": getattr(payment, "reference", reference),
-        "transaction_id": getattr(getattr(payment, "transaction", None), "id", None),
+        "reference": reference,                 # SUB-xxx
+        "notchpay_reference": notchpay_ref,     # trx.xxx — SAVE THIS
+        "transaction_id": notchpay_ref,         # alias
         "raw": _safe_dict(payment),
     }
 
 
-
 def retrieve_payment(reference: str) -> dict:
-    """
-    Récupère un paiement NotchPay.
-    Retourne toujours un dict — ne lève jamais d'exception pour un 404.
-    """
     client = _get_client()
     try:
         payment = client.payments.retrieve(reference)
-    except Exception as exc:  # noqa: BLE001
-        # 404 = référence inconnue côté NotchPay (ex: SUB-xxx envoyé par erreur)
+    except Exception as exc:
         msg = str(exc)
         if "404" in msg or "Not Found" in msg:
             logger.warning("NotchPay: reference %s introuvable (404)", reference)
             return {
                 "status": "not_found",
                 "is_complete": False,
-                "amount": None,
-                "currency": None,
+                "amount": None, "currency": None,
                 "transaction_id": None,
-                "raw": {"error": "not_found", "reference": reference},
+                "raw": {},
             }
-
         logger.exception("NotchPay retrieve failed for %s", reference)
         raise NotchPayError(f"Impossible de vérifier le paiement : {exc}") from exc
 
     status = getattr(getattr(payment, "transaction", None), "status", None)
+    raw = _safe_dict(payment)
+
     return {
         "status": status,
         "is_complete": status == "complete",
         "amount": getattr(payment, "amount", None),
         "currency": getattr(payment, "currency", None),
         "transaction_id": getattr(getattr(payment, "transaction", None), "id", None),
-        "raw": _safe_dict(payment),
+        # expose merchant reference if NotchPay returns it
+        "merchant_reference": (
+            raw.get("reference")
+            or (raw.get("metadata") or {}).get("internal_reference")
+            or (raw.get("metadata") or {}).get("reference")
+        ),
+        "raw": raw,
     }
     
 def _safe_dict(obj) -> dict:

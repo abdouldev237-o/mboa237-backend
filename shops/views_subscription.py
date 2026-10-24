@@ -158,9 +158,11 @@ class InitializeSubscriptionView(APIView):
 
         # Mise à jour de l'abonnement avec les infos NotchPay
         subscription.payment_url = result["authorization_url"]
-        subscription.transaction_id = result.get("transaction_id") or None
+        subscription.transaction_id = result.get("notchpay_reference") or result.get("transaction_id")
         subscription.provider_payload = result.get("raw") or {}
         subscription.save(update_fields=["payment_url", "transaction_id", "provider_payload"])
+        
+
 
         return Response(
             {
@@ -178,19 +180,11 @@ class InitializeSubscriptionView(APIView):
 # ================================================================
 
 class NotchPayCallbackView(APIView):
-    """
-    GET /api/me/subscription/callback/
-    Query params from NotchPay:
-      - trxref     : our internal reference (SUB-xxx)
-      - reference  : NotchPay transaction ID (trx.xxx)
-      - status     : complete | canceled | failed
-    """
     permission_classes = [AllowAny]
     authentication_classes = []
 
     def get(self, request):
-        # 1. Extract both references
-        sub_reference = (
+        sub_ref = (
             request.query_params.get("trxref")
             or request.query_params.get("sub_ref")
             or ""
@@ -202,68 +196,78 @@ class NotchPayCallbackView(APIView):
             or ""
         ).strip()
 
-        # If trxref is missing, check if the `reference` param is our SUB-xxx
-        if not sub_reference:
-            if notchpay_ref.startswith("SUB-"):
-                sub_reference = notchpay_ref
-                notchpay_ref = ""  # it's not a trx.xxx
+        # If trxref contains a SUB-xxx (some flows), use it as our ref
+        if sub_ref.startswith("SUB-") is False and notchpay_ref.startswith("SUB-"):
+            sub_ref, notchpay_ref = notchpay_ref, sub_ref
 
-        # 2. Find the subscription
+        # If trxref IS actually a trx.xxx (test mode), treat it as notchpay_ref
+        if sub_ref.startswith("trx"):
+            notchpay_ref = notchpay_ref or sub_ref
+            sub_ref = ""
+
         sub = None
 
-        if sub_reference:
-            try:
-                sub = Subscription.objects.select_related("shop").get(
-                    reference=sub_reference
-                )
-            except Subscription.DoesNotExist:
-                pass
+        # ── Fallback 1: lookup by our reference (SUB-xxx)
+        if sub_ref:
+            sub = Subscription.objects.select_related("shop").filter(
+                reference=sub_ref
+            ).first()
 
-        # Fallback: if not found by reference, try by transaction_id (trx.xxx)
-        if not sub and notchpay_ref.startswith("trx"):
+        # ── Fallback 2: lookup by NotchPay ref (trx.xxx) stored as transaction_id
+        if not sub and notchpay_ref:
+            sub = Subscription.objects.select_related("shop").filter(
+                transaction_id=notchpay_ref
+            ).first()
+
+        # ── Fallback 3: lookup via NotchPay API (recovers merchant reference from metadata)
+        if not sub and notchpay_ref:
             try:
-                sub = Subscription.objects.select_related("shop").get(
-                    transaction_id=notchpay_ref
-                )
-            except Subscription.DoesNotExist:
+                state = retrieve_payment(notchpay_ref)
+                recovered = state.get("merchant_reference")
+                if recovered:
+                    sub = Subscription.objects.select_related("shop").filter(
+                        reference=recovered
+                    ).first()
+                # If we got a valid sub and payment complete → activate now
+                if sub and state.get("is_complete"):
+                    sub.mark_active(transaction_id=notchpay_ref)
+                    return Response(_subscription_response(sub))
+            except NotchPayError:
                 pass
 
         if not sub:
             return Response(
                 {
-                    "detail": f"Abonnement introuvable pour la référence "
-                              f"trxref={sub_reference!r} / reference={notchpay_ref!r}."
+                    "detail": (
+                        "Impossible de retrouver ton abonnement. "
+                        "Ton paiement sera activé automatiquement via le webhook "
+                        "dès confirmation par NotchPay."
+                    ),
+                    "trxref": sub_ref,
+                    "reference": notchpay_ref,
+                    "status": "pending_webhook",
                 },
-                status=status.HTTP_404_NOT_FOUND,
+                status=status.HTTP_202_ACCEPTED,
             )
 
-        # 3. Already active → idempotent
         if sub.is_active:
             return Response(_subscription_response(sub))
 
-        # 4. Determine the NotchPay reference to verify
-        candidate_refs = []
-        if notchpay_ref.startswith("trx"):
-            candidate_refs.append(notchpay_ref)
-        if sub.transaction_id and sub.transaction_id.startswith("trx"):
-            candidate_refs.append(sub.transaction_id)
-
-        # 5. Verify with NotchPay
+        # ── Verify with NotchPay
+        candidates = [r for r in [notchpay_ref, sub.transaction_id] if r]
         state = None
-        for ref in candidate_refs:
+        for ref in candidates:
             try:
                 state = retrieve_payment(ref)
                 if state["status"] != "not_found":
                     break
-            except NotchPayError as exc:
-                logger.warning("NotchPay verify failed for %s: %s", ref, exc)
+            except NotchPayError:
                 continue
 
-        if state is None or state["status"] == "not_found":
+        if not state or state["status"] == "not_found":
             return Response(
                 {
-                    "detail": "Paiement non encore visible chez NotchPay. "
-                              "Réessaie dans quelques secondes.",
+                    "detail": "Paiement non encore visible chez NotchPay.",
                     "status": "pending_webhook",
                 },
                 status=status.HTTP_202_ACCEPTED,
@@ -278,57 +282,42 @@ class NotchPayCallbackView(APIView):
             return Response(_subscription_response(sub), status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
-            {
-                "detail": f"Paiement en statut « {state['status']} ».",
-                "status": "pending_webhook",
-            },
+            {"detail": f"Statut « {state['status']} ».", "status": "pending_webhook"},
             status=status.HTTP_202_ACCEPTED,
         )
-
-
 class VerifySubscriptionPaymentView(APIView):
-    """
-    POST /api/me/subscription/verify/
-    Body : { "reference": "SUB-xxx" }
-    Force la vérification d'un paiement (bouton "Actualiser" du frontend).
-    """
+    """POST /api/me/subscription/verify/  body: {reference}"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        ref = request.data.get("reference", "").strip()
+        ref = (request.data.get("reference") or "").strip()
         if not ref:
             return Response({"detail": "reference manquante"}, status=400)
 
-        try:
-            sub = Subscription.objects.select_related("shop").get(
-                reference=ref, shop__owner=request.user
-            )
-        except Subscription.DoesNotExist:
-            return Response({"detail": "Introuvable."}, status=404)
+        sub = Subscription.objects.select_related("shop").filter(
+            reference=ref, shop__owner=request.user
+        ).first()
+
+        if not sub:
+            return Response({"detail": "Abonnement introuvable."}, status=404)
 
         if sub.is_active:
             return Response(_subscription_response(sub))
 
-        # Essayer toutes les références NotchPay connues
-        candidate_refs = []
-        if sub.transaction_id:
-            candidate_refs.append(sub.transaction_id)
-        if sub.provider_payload.get("reference"):
-            candidate_refs.append(sub.provider_payload["reference"])
-
-        for r in candidate_refs:
+        for candidate in [sub.transaction_id, ref]:
+            if not candidate:
+                continue
             try:
-                state = retrieve_payment(r)
+                state = retrieve_payment(candidate)
                 if state["is_complete"]:
-                    sub.mark_active(transaction_id=state.get("transaction_id") or r)
+                    sub.mark_active(transaction_id=state.get("transaction_id") or candidate)
                     return Response(_subscription_response(sub))
             except NotchPayError:
                 continue
 
-        return Response(
-            {"status": "pending", "detail": "Toujours en attente."},
-            status=status.HTTP_202_ACCEPTED,
-        )        
+        return Response({"status": "pending"}, status=202)
+    
+               
 # ================================================================
 # 4. WEBHOOK NOTCHPAY (source de vérité)
 # ================================================================

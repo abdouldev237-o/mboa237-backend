@@ -36,6 +36,7 @@ router.register("me/products",   MyProductViewSet,   basename="my-product")
 
 urlpatterns = [
     path("me/subscription/verify/", VerifySubscriptionPaymentView.as_view(), name="my-sub-verify"),
+    
     # ================= AUTH =================
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
